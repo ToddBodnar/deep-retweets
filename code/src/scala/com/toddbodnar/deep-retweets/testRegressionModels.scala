@@ -1,5 +1,4 @@
-//NOT to be used for actual model fitting, but to just get an idea of how vector size effects fitting
-//Use word2vec of different vector sizes and a simple linear regression to see if there's much of a performance difference
+//Try different types of regression models on top of the word2vec model
 
 //Use bag of words like models for prediction
 import org.apache.spark.mllib.feature.{Word2Vec, Word2VecModel}
