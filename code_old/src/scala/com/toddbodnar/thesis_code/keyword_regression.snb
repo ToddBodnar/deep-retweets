@@ -1,0 +1,220 @@
+{
+  "metadata" : {
+    "name" : "keyword_regression",
+    "user_save_timestamp" : "1969-12-31T16:00:00.000Z",
+    "auto_save_timestamp" : "1969-12-31T16:00:00.000Z",
+    "language_info" : {
+      "name" : "scala",
+      "file_extension" : "scala",
+      "codemirror_mode" : "text/x-scala"
+    },
+    "trusted" : true,
+    "customLocalRepo" : null,
+    "customRepos" : null,
+    "customDeps" : null,
+    "customImports" : null,
+    "customArgs" : null,
+    "customSparkConf" : null
+  },
+  "cells" : [ {
+    "metadata" : {
+      "id" : "AF8FC5B3A61A4732B03F8D2B8667186F"
+    },
+    "cell_type" : "markdown",
+    "source" : "# Keyword Regression\n\nThe baseline model based on bag of words and basic multivaliable models. We get a performance of an MSE of 0.00697 and a coorelation of 0.12878 when using a smaller model set, which isn't bad. (note that we bake the most predictive variable, follower count, into the retweet count *before* worrying about model performance.)\n\nSet `USE_MORE_MODELS` to true if you want to run the full experiment (but much slower/memory intensive)"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false,
+      "id" : "9FE2BB989906497982ADA3501CAD3285"
+    },
+    "cell_type" : "code",
+    "source" : "val USE_MORE_MODELS = false\n\nimport org.apache.spark.mllib.regression.LabeledPoint\nimport org.apache.spark.mllib.regression.LinearRegressionWithSGD\nimport org.apache.spark.mllib.linalg.Vectors\nimport org.apache.spark.mllib.stat.Statistics\n",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "USE_MORE_MODELS: Boolean = false\nimport org.apache.spark.mllib.regression.LabeledPoint\nimport org.apache.spark.mllib.regression.LinearRegressionWithSGD\nimport org.apache.spark.mllib.linalg.Vectors\nimport org.apache.spark.mllib.stat.Statistics\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : ""
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 10
+    } ]
+  }, {
+    "metadata" : {
+      "id" : "C2A64422C2A44A679234AACAAB282A80"
+    },
+    "cell_type" : "markdown",
+    "source" : "First, let's implement some helper functions:"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false,
+      "id" : "760AE217C3914C9EB91B08EE213C442E"
+    },
+    "cell_type" : "code",
+    "source" : "//tokenize the string into words by non-alphanumeric characters\ndef parse(line: String): Array[String] = {\n  line.split(\"[^a-zA-Z0-9]\")\n}\n\n//we could add some better stemmer here, but we'll just lowercase it\ndef stem(word: String): String = {\n  word.toLowerCase()\n}\n\n//Converts a string into a sparse vector of word occurances\ndef stringToKeywordVector(line: String, keywords: Array[String]): List[(Int,Double)] = {\n  var vector = List[(Int,Double)]()\n  var tokenized = parse(line)\n  for(i <- 0 to tokenized.length-1)\n  {\n      tokenized(i) = stem(tokenized(i))\n  }\n  for(i <- 0 to (keywords.length-1))\n  {\n     if(tokenized.contains(keywords(i)))\n     {\n       vector = vector:+(i,1.0)\n     }\n  }\n  vector\n}\n\n//based on ML tutorial\ndef MSE( data: org.apache.spark.rdd.RDD[(Double, Double)] ): Double = {\n  data.map{case(v, p) => math.pow((v - p), 2)}.mean()\n}\n\n//coorelation calculation when the dataset is the transpose of what Statistics.coor expects\ndef coorExtended( data: org.apache.spark.rdd.RDD[(Double, Double)] ): Double = {\n  val count = data.map(x => 1.0).reduce(_+_)\n  val meanx = data.map(_._1).reduce(_+_) / count\n  val meany = data.map(_._2).reduce(_+_) / count\n  val dx = data.map(_._1 - meanx)\n  val dy = data.map(_._2 - meany)\n  val xx = dx.map(x => x*x).reduce(_+_)\n  val yy = dy.map(y => y*y).reduce(_+_)\n  val xy = data.map(x => (x._1 - meanx)*(x._2 - meany)).reduce(_+_)\n  xy / Math.sqrt(xx*yy)\n}\n\ndef model_select( result : List[(Int,Int,Map[String,Double])] ) :(String,Map[String,(Int,Int)]) ={\n\n  var bestModel = result(0)\n  \n  var bestScore = 99.0\n  \n  var result_string = \"Best by MSE:\\n\"\n  var models_selected = Map[String,(Int,Int)]()\n  \n  \n  for(r <- result)\n  {\n    if(r._3(\"Testing MSE\") < bestScore)\n    {\n       bestModel = r\n       bestScore = r._3(\"Testing MSE\")\n    }\n  }\n  result_string += (bestModel._3(\"Validation MSE\")) + \"\\n\"\n\n  models_selected += (\"MSE\"->((bestModel._1,bestModel._2)))\n  \n  result_string += \"Best by coor:\\n\"\n\n  bestModel = result(0)\n  bestScore = -99.0\n\n  for(r <- result)\n  {\n    if(r._3(\"Testing coor\") > bestScore)\n    {\n      bestModel = r\n      bestScore = r._3(\"Testing coor\")\n    }\n  }\n  result_string += (bestModel._3(\"Validation coor\")) + \"\\n\"\n  models_selected += (\"coor\"->((bestModel._1,bestModel._2)))\n  \n  return (result_string,models_selected)\n}\n",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "parse: (line: String)Array[String]\nstem: (word: String)String\nstringToKeywordVector: (line: String, keywords: Array[String])List[(Int, Double)]\nMSE: (data: org.apache.spark.rdd.RDD[(Double, Double)])Double\ncoorExtended: (data: org.apache.spark.rdd.RDD[(Double, Double)])Double\nmodel_select: (result: List[(Int, Int, Map[String,Double])])(String, Map[String,(Int, Int)])\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : ""
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 2
+    } ]
+  }, {
+    "metadata" : {
+      "id" : "7F49CD685FF5493288F371DD534515D9"
+    },
+    "cell_type" : "markdown",
+    "source" : "Load the data (view the README about data collection/getting your own) and calculate the general keyword model once."
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false,
+      "id" : "2CE1843E54834BB98E7AA39AD406049F"
+    },
+    "cell_type" : "code",
+    "source" : "val input = sc.textFile(\"/Users/toddbodnar/Dropbox/retweets_h7n9.csv\")\n\n//force a set seed for reproducibility \nval parsed = input.map(line => (line.split(\"\\t\"))).randomSplit(Array(0.8, 0.1, 0.1), seed = 42)\n\n//parsed.take(50).foreach(println)\n\n//do word count to find most common words\nval documents = parsed(0).map( _(2))\nval alltext = documents.flatMap(parse(_)).filter(!_.equals(\"\")).map(stem(_))\nval wordcount = alltext.map(x => (x,1)).reduceByKey((x,y) => x+y).map(x=> (-x._2,x._1))//last map = flip the key and value and invert the count so sorting will be reversed\n\nwordcount.persist()",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "input: org.apache.spark.rdd.RDD[String] = MapPartitionsRDD[1] at textFile at <console>:65\nparsed: Array[org.apache.spark.rdd.RDD[Array[String]]] = Array(MapPartitionsRDD[3] at randomSplit at <console>:68, MapPartitionsRDD[4] at randomSplit at <console>:68, MapPartitionsRDD[5] at randomSplit at <console>:68)\ndocuments: org.apache.spark.rdd.RDD[String] = MapPartitionsRDD[6] at map at <console>:73\nalltext: org.apache.spark.rdd.RDD[String] = MapPartitionsRDD[9] at map at <console>:74\nwordcount: org.apache.spark.rdd.RDD[(Int, String)] = MapPartitionsRDD[12] at map at <console>:75\nres4: wordcount.type = MapPartitionsRDD[12] at map at <console>:75\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "MapPartitionsRDD[12] at map at &lt;console&gt;:75"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 3
+    } ]
+  }, {
+    "metadata" : {
+      "id" : "F0DB5D040B404342B077ECFE838239AB"
+    },
+    "cell_type" : "markdown",
+    "source" : "Next, we'll melt the multiple loops (number of keywords, keyword selection requirements) into a single list, which could be used if we wanted to run each model eval in parallel.\n\nThis *should* make things a bit easier to read, also, since the actual train/test code just reads in a tuple."
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false,
+      "id" : "0C18A64590804AF2856CB8B8BC8276B3"
+    },
+    "cell_type" : "code",
+    "source" : "var jobConfigs = List[(Int,Int)]()\nif(USE_MORE_MODELS)\n{\n  for(NUM_WORDS <- Array(50,100,250,500,1000,2500,5000,10000,25000,50000, wordcount.count().toInt); NUM_ITERS <- Array(10,100,1000,10000))\n  {\n    jobConfigs = jobConfigs:+ (NUM_WORDS,NUM_ITERS)\n  }\n}\nelse\n{\n  for(NUM_WORDS <- Array(50,100,250); NUM_ITERS <- Array(10,100)) \n  {\n    jobConfigs = jobConfigs:+ (NUM_WORDS,NUM_ITERS)\n  }\n}",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "jobConfigs: List[(Int, Int)] = List((50,10), (50,100), (100,10), (100,100), (250,10), (250,100))\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : ""
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 4
+    } ]
+  }, {
+    "metadata" : {
+      "id" : "E259461D50324F9E98BC733F56E2A501"
+    },
+    "cell_type" : "markdown",
+    "source" : "Run/eval each model based on the jobConfig paramenter and save the coorrelation/mse for each model on the train/test/validate datasets. (Technically, we should be blind to the validate results until a final model is selected, but it's cleaner to calculate it now if you assume the user to not do anything based on it.)\n\nNote that as of writing this, Spark Notebook's progress bar greatly underestimates the completion of tasks in loops."
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false,
+      "id" : "58FCC1E75DC04D9CB11E70316A6A32B1"
+    },
+    "cell_type" : "code",
+    "source" : "var result = List[(Int,Int,Map[String,Double])]()\nfor(config <- jobConfigs)\n{\n  val NUM_WORDS = config._1\n  val NUM_ITERS = config._2\n  //println(\"Using \"+NUM_WORDS+\" words\")\n\n  val wordsToUse = wordcount.takeOrdered(NUM_WORDS).map(_._2)\n\n  //convert the raw data into (y,word vector) pairs\n  val training = parsed(0).map(x=> LabeledPoint(Integer.parseInt(x(0))/(1.0+Integer.parseInt(x(1))), Vectors.sparse(NUM_WORDS,stringToKeywordVector(x(2),wordsToUse)))).cache()\n  val testing = parsed(1).map(x=> LabeledPoint(Integer.parseInt(x(0))/(1.0+Integer.parseInt(x(1))), Vectors.sparse(NUM_WORDS,stringToKeywordVector(x(2),wordsToUse))))\n  val validating = parsed(2).map(x=> LabeledPoint(Integer.parseInt(x(0))/(1.0+Integer.parseInt(x(1))), Vectors.sparse(NUM_WORDS,stringToKeywordVector(x(2),wordsToUse))))\n\n  //fit the model\n  val model = LinearRegressionWithSGD.train(training,NUM_ITERS)\n  \n  //model scoring\n  val trainingEval = training.map { point => (point.label, model.predict(point.features))}\n  val testingEval = testing.map { point => (point.label, model.predict(point.features))}\n  val validateEval = validating.map { point => (point.label, model.predict(point.features))}\n\n  var evaluations = Map[String,Double]()\n\n  evaluations += (\"Training MSE\"->MSE(trainingEval))\n  evaluations += (\"Training coor\"->coorExtended(trainingEval))\n  training.unpersist()//allow the training data to be garbage collected\n  \n  evaluations += (\"Testing MSE\"->MSE(testingEval))\n  evaluations += (\"Testing coor\"->coorExtended(testingEval))\n  \n  evaluations += (\"Validation MSE\"->MSE(validateEval))\n  evaluations += (\"Validation coor\"->coorExtended(validateEval))\n\n  result :+= (NUM_WORDS,NUM_ITERS,evaluations)\n  \n  \n}",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "result: List[(Int, Int, Map[String,Double])] = List((50,10,Map(Validation coor -> 0.07724037924715607, Testing coor -> 0.08076623835910858, Training coor -> 0.07412846821851019, Validation MSE -> 0.0070402280203640194, Training MSE -> 0.007788172609401931, Testing MSE -> 0.007264279935452796)), (50,100,Map(Validation coor -> 0.07724037924715607, Testing coor -> 0.08076623835910858, Training coor -> 0.07412846821851019, Validation MSE -> 0.0070402280203640194, Training MSE -> 0.007788172609401931, Testing MSE -> 0.007264279935452796)), (100,10,Map(Validation coor -> 0.08563857992676997, Testing coor -> 0.09053716081416283, Training coor -> 0.08625140026015396, Validation MSE -> 0.0070300886208852905, Training MSE -> 0.007772463789754469, Testing MSE -> 0.0072520937359926456)), (100,100,M..."
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : ""
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 5
+    } ]
+  }, {
+    "metadata" : {
+      "id" : "90D887DE30114E4A84B371947AE44627"
+    },
+    "cell_type" : "markdown",
+    "source" : "Output the data related to the models with the best performance (based on the validation sets)."
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false,
+      "id" : "FE38D142EF424E149A5D2C437F91AA97"
+    },
+    "cell_type" : "code",
+    "source" : "\nprintln(model_select(result)._1)",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "Best by MSE:\n0.006974128597564847\nBest by coor:\n0.12877685188918578\n\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : ""
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 9
+    } ]
+  }, {
+    "metadata" : {
+      "id" : "254E00FD47714C0B93242EF0AE552109"
+    },
+    "cell_type" : "markdown",
+    "source" : "Or dump the entire result set (possibly to save as a csv for further work):"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false,
+      "id" : "CCA7E95CC2F94A3F9910139972FF1358"
+    },
+    "cell_type" : "code",
+    "source" : "println(\"Formatted results:\")\nprintln(\"Num Words, Num Iters, Training MSE, Test MSE, Validation MSE, Training R, Test R, Validation R\")\nresult.foreach(x=>\n    println(x._1+\",\"+x._2+\",\"+x._3(\"Training MSE\")+\",\"+x._3(\"Testing MSE\")+\",\"+x._3(\"Validation MSE\")+\",\"+x._3(\"Training coor\")+\",\"+x._3(\"Testing coor\")+\",\"+x._3(\"Validation coor\"))\n    )",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "Formatted results:\nNum Words, Num Iters, Training MSE, Test MSE, Validation MSE, Training R, Test R, Validation R\n50,10,0.007788172609401931,0.007264279935452796,0.0070402280203640194,0.07412846821851019,0.08076623835910858,0.07724037924715607\n50,100,0.007788172609401931,0.007264279935452796,0.0070402280203640194,0.07412846821851019,0.08076623835910858,0.07724037924715607\n100,10,0.007772463789754469,0.0072520937359926456,0.0070300886208852905,0.08625140026015396,0.09053716081416283,0.08563857992676997\n100,100,0.007772463789754469,0.0072520937359926456,0.0070300886208852905,0.08625140026015396,0.09053716081416283,0.08563857992676997\n250,10,0.007703521561326095,0.007181317013196327,0.006974128597564847,0.13515682532992476,0.14244947161047952,0.12877685188918578\n250,100,0.007703521561326095,0.007181317013196327,0.006974128597564847,0.13515682532992476,0.14244947161047952,0.12877685188918578\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : ""
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 8
+    } ]
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : true,
+      "id" : "D94D022C549D47DD882C7E23157DC0CF"
+    },
+    "cell_type" : "code",
+    "source" : "",
+    "outputs" : [ ]
+  } ],
+  "nbformat" : 4
+}
